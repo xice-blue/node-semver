@@ -314,9 +314,9 @@ function SemVer(version, loose) {
   else
     this.prerelease = m[4].split('.').map(function(id) {
       if (/^[0-9]+$/.test(id)) {
-        var num = +id
+        var num = +id;
         if (num >= 0 && num < MAX_SAFE_INTEGER)
-          return num
+          return num;
       }
       return id;
     });
@@ -966,11 +966,11 @@ function replaceXRange(comp, loose) {
       } else if (gtlt === '<=') {
         // <=0.7.x is actually <0.8.0, since any 0.7.x should
         // pass.  Similarly, <=7.x is actually <8.0.0, etc.
-        gtlt = '<'
+        gtlt = '<';
         if (xm)
-          M = +M + 1
+          M = +M + 1;
         else
-          m = +m + 1
+          m = +m + 1;
       }
 
       ret = gtlt + M + '.' + m + '.' + p;
@@ -1087,11 +1087,34 @@ function satisfies(version, range, loose) {
 
 exports.maxSatisfying = maxSatisfying;
 function maxSatisfying(versions, range, loose) {
-  return versions.filter(function(version) {
-    return satisfies(version, range, loose);
-  }).sort(function(a, b) {
-    return rcompare(a, b, loose);
-  })[0] || null;
+  var max = null;
+  var maxSV = null;
+  var rangeObj = new Range(range, loose);
+  versions.forEach(function (v) {
+    if (rangeObj.test(v)) { // satisfies(v, range, loose)
+      if (!max || maxSV.compare(v) === -1) { // compare(max, v, true)
+        max = v;
+        maxSV = new SemVer(max, loose);
+      }
+    }
+  })
+  return max;
+}
+
+exports.minSatisfying = minSatisfying;
+function minSatisfying(versions, range, loose) {
+  var min = null;
+  var minSV = null;
+  var rangeObj = new Range(range, loose);
+  versions.forEach(function (v) {
+    if (rangeObj.test(v)) { // satisfies(v, range, loose)
+      if (!min || minSV.compare(v) === 1) { // compare(min, v, true)
+        min = v;
+        minSV = new SemVer(min, loose);
+      }
+    }
+  })
+  return min;
 }
 
 exports.validRange = validRange;
@@ -1186,3 +1209,115 @@ function outside(version, range, hilo, loose) {
   }
   return true;
 }
+
+exports.prerelease = prerelease;
+function prerelease(version, loose) {
+  var parsed = parse(version, loose);
+  return (parsed && parsed.prerelease.length) ? parsed.prerelease : null;
+}
+
+var intersectionsSet = function (setA, setB) {
+    var mergeSet = setA.concat(setB);
+    var matching = true;
+    var minSet = null;
+    var maxSet = null;
+    var eqSet = null;
+    var neqSet = [];
+    for (var i = 0; i < mergeSet.length && matching; i++) {
+        var mergeSetOperator = mergeSet[i].operator;
+        if (mergeSetOperator == '===' || mergeSetOperator == '==' || mergeSetOperator == '=' || mergeSetOperator == '') {
+            if (!minSet && !maxSet) {
+                eqSet = mergeSet[i];
+            } else if ((minSet && minSet.test(mergeSet[i].semver)) || (maxSet && maxSet.test(mergeSet[i].semver))) {
+                minSet = null;
+                maxSet = null;
+                eqSet = mergeSet[i];
+            } else {
+                matching = false;
+                break;
+            }
+        } else if (mergeSetOperator == '!==' || mergeSetOperator == '!=') {
+            neqSet.push(mergeSet[i]);
+        } else if (mergeSetOperator == '>' || mergeSetOperator == '>=') {
+            var rangeOperator = minSet ? minSet.operator : null;
+            if (!minSet) {
+                minSet = mergeSet[i];
+            } else if (minSet.test(mergeSet[i].semver)) {// a include b
+                minSet = mergeSet[i];
+                if (minSet.semver == mergeSet[i].semver && rangeOperator != mergeSetOperator) {
+                    minSet.operator = '>';
+                }
+            } else if (mergeSet[i].test(minSet.semver)) {// b include a
+                if (rangeOperator != mergeSetOperator) {
+                    minSet.operator = '>';
+                }
+            } else {
+                matching = false;
+                break;
+            }
+            if (eqSet) {
+                if (!minSet.test(eqSet.semver)) {
+                    eqSet = null;
+                }
+                minSet = null;
+            }
+        } else if (mergeSetOperator == '<' || mergeSetOperator == '<=') {
+            var rangeOperator = maxSet ? maxSet.operator : null;
+            if (!maxSet) {
+                maxSet = mergeSet[i];
+            } else if (maxSet.test(mergeSet[i].semver)) {// a include b
+                maxSet = mergeSet[i];
+                if (maxSet.semver == mergeSet[i].semver && rangeOperator != mergeSetOperator) {
+                    maxSet.operator = '<';
+                }
+            } else if (mergeSet[i].test(maxSet.semver)) {// b include a
+                if (rangeOperator != mergeSetOperator) {
+                    maxSet.operator = '<';
+                }
+            } else {
+                matching = false;
+                break;
+            }
+            if (eqSet) {
+                if (!maxSet.test(eqSet.semver)) {
+                    eqSet = null;
+                }
+                maxSet = null;
+            }
+        }
+    }
+    if (minSet && maxSet && !minSet.test(maxSet.semver) && !maxSet.test(minSet.semver)) {
+        matching = false;
+    }
+    var intersectionSet = [];
+    if (matching) {
+        if (minSet) {
+            intersectionSet.push(minSet);
+        }
+        if (maxSet) {
+            intersectionSet.push(maxSet);
+        }
+        if (eqSet) {
+            intersectionSet = [eqSet];
+        }
+    }
+    return intersectionSet.length ? intersectionSet.concat(neqSet) : null;
+};
+
+// get range intersections
+Range.prototype.intersections = function (range, loose) {
+    range = Range(range, loose);
+    var intersectionsRange = Range(this.toString(), this.loose);
+    intersectionsRange.set = [];
+    intersectionsRange.raw = '';
+    for (var i = 0; i < this.set.length; i++) {
+        for (var j = 0; j < range.set.length; j++) {
+            var rangeSet = intersectionsSet(this.set[i], range.set[j]);
+            if (rangeSet) {
+                intersectionsRange.set.push(rangeSet);
+            }
+        }
+    }
+    intersectionsRange.format();
+    return intersectionsRange;
+};
